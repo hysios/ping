@@ -61,6 +61,7 @@ import (
 	"math"
 	"math/rand"
 	"net"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -102,6 +103,7 @@ func New(addr string) *Pinger {
 		ipv4:              false,
 		network:           "ip",
 		protocol:          "udp",
+		rtts:              make(map[int]time.Duration),
 		awaitingSequences: map[int]struct{}{},
 		logger:            StdLogger{Logger: log.New(log.Writer(), log.Prefix(), log.Flags())},
 	}
@@ -152,7 +154,7 @@ type Pinger struct {
 	RecordRtts bool
 
 	// rtts is all of the Rtts
-	rtts []time.Duration
+	rtts map[int]time.Duration
 
 	// OnSetup is called when Pinger has finished setting up the listening socket
 	OnSetup func()
@@ -247,7 +249,7 @@ type Statistics struct {
 	Addr string
 
 	// Rtts is all of the round-trip times sent via this pinger.
-	Rtts []time.Duration
+	Rtts map[int]time.Duration
 
 	// MinRtt is the minimum round-trip time sent via this pinger.
 	MinRtt time.Duration
@@ -261,6 +263,8 @@ type Statistics struct {
 	// StdDevRtt is the standard deviation of the round-trip times sent via
 	// this pinger.
 	StdDevRtt time.Duration
+
+	WaitSequences []int
 }
 
 func (p *Pinger) updateStatistics(pkt *Packet) {
@@ -269,7 +273,7 @@ func (p *Pinger) updateStatistics(pkt *Packet) {
 
 	p.PacketsRecv++
 	if p.RecordRtts {
-		p.rtts = append(p.rtts, pkt.Rtt)
+		p.rtts[pkt.Seq] = pkt.Rtt
 	}
 
 	if p.PacketsRecv == 1 || pkt.Rtt < p.minRtt {
@@ -520,8 +524,20 @@ func (p *Pinger) Statistics() *Statistics {
 		MinRtt:                p.minRtt,
 		AvgRtt:                p.avgRtt,
 		StdDevRtt:             p.stdDevRtt,
+		WaitSequences:         p.waitSeqKeys(),
 	}
 	return &s
+}
+
+func (p *Pinger) waitSeqKeys() []int {
+	var seqs = make([]int, 0)
+
+	for seq, _ := range p.awaitingSequences {
+		seqs = append(seqs, seq)
+	}
+
+	sort.Sort(sort.IntSlice(seqs))
+	return seqs
 }
 
 type expBackoff struct {
